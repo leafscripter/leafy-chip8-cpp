@@ -1,9 +1,9 @@
 #include <iostream>
-#include "includes/emulator.hpp"
+#include "includes/chip8.hpp"
 #include <SFML/Graphics.hpp>
 #include <array>
 
-using emulator::Emulator;
+using chip8::Chip8;
 
 std::array<uint8_t, 80> fontset = {
 	0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -26,13 +26,13 @@ std::array<uint8_t, 80> fontset = {
 
 int main() {
 
-	Emulator chip8;
+	Chip8 emulator(fontset);
 
 	std::string fn;
 	std::cout << "Enter valid name: ";
 	std::cin >> fn;
 	
-	chip8.load_rom_into_memory(fn);
+	emulator.load_rom_into_memory(fn);
 
 	sf::RenderWindow window(sf::VideoMode(64, 32), "Chip8");
 
@@ -43,7 +43,7 @@ int main() {
 				window.close();
 		}
 
-		chip8.PerformCpuCycle();
+		emulator.ExecuteClockCycle();
 	}
 
 	return 0;
