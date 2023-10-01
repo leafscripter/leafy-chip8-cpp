@@ -5,6 +5,17 @@
 #include <string>
 
 namespace chip8 {
+
+	enum class Opcode {
+		kClearScreen,
+		kJump,
+		kSetVX,
+		kAddVX,
+		kSetIndexRegister,
+		kDraw,
+		kUnsupported
+	};
+
 	class Chip8 {
 		public:
 			Chip8(std::array<uint8_t, 80> fontset);
@@ -21,5 +32,8 @@ namespace chip8 {
 			uint8_t sound_timer;
 			uint16_t I;
 			uint16_t pc;
+
+			Opcode get_enum_format(uint16_t opcode);
+			uint16_t fetch_opcode();
 	};
 }
