@@ -24,15 +24,17 @@ std::array<uint8_t, 80> fontset = {
 	0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 };
 
+void RenderGraphics(Chip8 &ch8, sf::RenderWindow* window);
+
 int main() {
 
-	Chip8 emulator(fontset);
+	Chip8 cpu(fontset);
 
-	std::string fn;
+	std::string path;
 	std::cout << "Enter valid name: ";
-	std::cin >> fn;
+	std::cin >> path;
 	
-	emulator.load_rom_into_memory(fn);
+	cpu.load_rom(path);
 
 	sf::RenderWindow window(sf::VideoMode(64, 32), "Chip8");
 
@@ -43,8 +45,29 @@ int main() {
 				window.close();
 		}
 
-		emulator.ExecuteClockCycle();
+		// run a CHIP8 CPU cycle
+		cpu.emulate_cycle();
+
+		// clear screen if the instruction says so
+		if (cpu.get_clear_flag()) {
+			window.clear(sf::Color::Black);
+			cpu.set_clear_flag(false);
+		}
+
+		// draw if the flag is set
+		if (cpu.get_draw_flag()) {
+			RenderGraphics(&cpu);
+			!cpu.set_draw_flag(false);
+		}
 	}
 
 	return 0;
+}
+
+void RenderGraphics(Chip8 &ch8, sf::RenderWindow* window) {
+	window.clear(); 
+
+	// Implement drawing logic here
+
+	window.display();
 }

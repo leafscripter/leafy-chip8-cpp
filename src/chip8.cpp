@@ -6,9 +6,16 @@
 using namespace chip8;
 
 // First 512 bytes of CHIP8 memory are reserved
-constexpr size_t kReservedBytes {512};
-constexpr size_t kScreenWidth {32};
-constexpr size_t kScreenHeight{64};
+static constexpr size_t kReservedBytes {512};
+static constexpr size_t kScreenWidth {32};
+static constexpr size_t kScreenHeight{64};
+
+// Defining masks for the decoding process
+static constexpr uint16_t mask_x = 0x0f00;
+static constexpr uint8_t mask_y = 0x00f0;
+static constexpr uint8_t mask_n = 0x000f;
+static constexpr uint8_t mask_nn = 0x00ff;
+static constexpr uint16_t mask_nnn = 0x0fff;
 
 Chip8::Chip8(std::array<uint8_t, 80> fontset): 
 	stack{}, // holds 8 16-bit addresses
@@ -24,18 +31,40 @@ Chip8::Chip8(std::array<uint8_t, 80> fontset):
 	std::copy(fontset.begin(), fontset.end(), memory.begin());
 }
 
-uint16_t Chip8::fetch_opcode() {
-	uint16_t lower_opcode_half; 
-	uint8_t upper_opcode_half;
-
-	lower_opcode_half = memory.at(pc);
-	lower_opcode_half <<= 8;
-	upper_opcode_half = memory.at(pc++);
-
-	pc += 2;
-
-	return lower_opcode_half | upper_opcode_half;
+void Chip8::set_draw_flag(bool state) {
+	draw_flag = state;
 }
+
+bool Chip8::get_draw_flag() {
+	return draw_flag;
+}
+
+bool Chip8::get_clear_flag() {
+	return clear_flag;
+}
+
+void Chip8::set_clear_flag(bool state) {
+	clear_flag = state;
+}
+
+Opcode Chip8::fetch_opcode() {
+	Opcode op{};
+	uint16_t opcode{};
+	
+	/*Fetch two bytes in succession
+	Merge both bytes into one 16-bit instruction 
+	Convert it to an enum class*/
+	opcode = memory[pc];
+	opcode <<= 8;
+	opcode |= memory[pc + 1]; 
+	op = get_enum_format(opcode);
+
+	current_opcode = opcode; // storing for later use
+
+	pc += 2; // get ready to fetch next instruction
+
+	return op;
+} 
 
 Opcode Chip8::get_enum_format(uint16_t opcode) {
 	switch (opcode) {
@@ -51,14 +80,11 @@ Opcode Chip8::get_enum_format(uint16_t opcode) {
 			return Opcode::kSetIndexRegister;
 		case 0xD000:
 			return Opcode::kDraw;
-		default:
-			return Opcode::kUnsupported;
-			break;
 	}
 	return Opcode::kUnsupported;
 }
 
-bool Chip8::load_rom_into_memory(std::string const &path) {
+bool Chip8::load_rom(std::string const &path) {
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
 
 	if (!file) // failed to open file!
@@ -87,31 +113,30 @@ bool Chip8::load_rom_into_memory(std::string const &path) {
 	return true;
 }
 
-static constexpr uint16_t mask_x = 0x0f00;
-static constexpr uint8_t mask_y = 0x00f0;
-static constexpr uint8_t mask_n = 0x000f;
-static constexpr uint8_t mask_nn = 0x00ff;
-static constexpr uint16_t mask_nnn = 0x0fff;
 
-inline uint16_t MaskBytes(uint16_t bytes, uint16_t mask, uint8_t bits_to_shift=0) {	return (bytes & mask) >> bits_to_shift; }
+inline uint16_t ExtractNibbles(uint16_t bytes, uint16_t mask, uint8_t bits_to_shift=0) {	
+	return (bytes & mask) >> bits_to_shift; 
+}
 
-void Chip8::ExecuteClockCycle() {
-	Opcode enum_opcode;
+void Chip8::emulate_cycle() {
 
-	uint16_t opcode = fetch_opcode();
-	uint16_t address = MaskBytes(opcode, mask_nnn);
+	// Fetching stage
+	Opcode op = fetch_opcode();
 
-	uint8_t x = MaskBytes(opcode, mask_x, 8); // used to index registers VX-VF
-	uint8_t y = MaskBytes(opcode, mask_y, 4); // used to index registers VY-VF
-	uint8_t n = MaskBytes(opcode, mask_n); // a 4-bit number
-	uint8_t nn = MaskBytes(opcode, mask_nn); // an 8-bit immediate number
+	// Decoding stage
+	uint16_t address = ExtractNibbles(current_opcode, mask_nnn);
+	uint8_t x = ExtractNibbles(current_opcode, mask_x, 8); // used to index registers VX-VF
+	uint8_t y = ExtractNibbles(current_opcode, mask_y, 4); // used to index registers VY-VF
+	uint8_t n = ExtractNibbles(current_opcode, mask_n); // a 4-bit number
+	uint8_t nn = ExtractNibbles(current_opcode, mask_nn); // an 8-bit immediate number
 
-	enum_opcode = get_enum_format(opcode);
-	switch (enum_opcode) {
+	// Execution stage
+	switch (op) {
 		case Opcode::kUnsupported:
 			std::cout << "Error: CHIP8 instruction set does not support this opcode\n";
 			return;
 		case Opcode::kClearScreen:
+			clear_flag = true;
 			break;
 		case Opcode::kJump:
 			pc = address;
@@ -126,8 +151,8 @@ void Chip8::ExecuteClockCycle() {
 			I = address;
 			break;
 		case Opcode::kDraw: 
-			uint8_t x_pos = v[x] & 63;
-			uint8_t y_pos = v[y] & 31;
+			draw_flag = true;
+			break;
 	}
 }
 
