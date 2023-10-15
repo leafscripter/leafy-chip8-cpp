@@ -5,17 +5,31 @@
 
 using namespace chip8;
 
+// For added readability
+typedef uint16_t WORD;
+typedef uint8_t BYTE;
+
 // First 512 bytes of CHIP8 memory are reserved
 static constexpr size_t kReservedBytes {512};
 static constexpr size_t kScreenWidth {32};
 static constexpr size_t kScreenHeight{64};
 
-// Defining masks for the decoding process
-static constexpr uint16_t mask_x = 0x0f00;
-static constexpr uint8_t mask_y = 0x00f0;
-static constexpr uint8_t mask_n = 0x000f;
-static constexpr uint8_t mask_nn = 0x00ff;
-static constexpr uint16_t mask_nnn = 0x0fff;
+// Defining bitmasks for the decoding process
+static constexpr WORD bitmask_x {0x0f00};
+static constexpr WORD bitmask_nnn {0x0fff};
+static constexpr BYTE bitmask_y {0x00f0};
+static constexpr BYTE bitmask_n {0x000f};
+static constexpr BYTE bitmask_nn = {0x00ff};
+static constexpr BYTE bitmask_id = {0xf000};
+
+inline WORD ApplyBitmaskToWord(WORD word, WORD bitmask, BYTE lshift=0) {	
+	word &= bitmask; 
+	
+	if (lshift)
+		word >>= lshift;
+
+	return word; 
+}
 
 Chip8::Chip8(std::array<uint8_t, 80> fontset): 
 	stack{}, // holds 8 16-bit addresses
@@ -26,65 +40,68 @@ Chip8::Chip8(std::array<uint8_t, 80> fontset):
 	delay_timer{0},
 	sound_timer{0},
 	I{0},
-	pc{512} // program counter must start at 512 to execute rom
+	pc{kReservedBytes}, // program counter must start at 512 to execute rom
+	current_opcode{}
 {
 	std::copy(fontset.begin(), fontset.end(), memory.begin());
 }
 
-void Chip8::set_draw_flag(bool state) {
-	draw_flag = state;
+WORD Chip8::fetch_opcode() {
+	WORD opcode{};
+
+	opcode = memory[pc]; // fetch first byte
+	opcode <<= 8;  // shift 8 bits to the right to make space for the second byte
+	opcode |= memory[pc + 1]; // fetch the second byte, and then merge with first byte
+
+	return opcode;
 }
 
-bool Chip8::get_draw_flag() {
-	return draw_flag;
-}
-
-bool Chip8::get_clear_flag() {
-	return clear_flag;
-}
-
-void Chip8::set_clear_flag(bool state) {
-	clear_flag = state;
-}
-
-Opcode Chip8::fetch_opcode() {
-	Opcode op{};
-	uint16_t opcode{};
-	
-	/*Fetch two bytes in succession
-	Merge both bytes into one 16-bit instruction 
-	Convert it to an enum class*/
-	opcode = memory[pc];
-	opcode <<= 8;
-	opcode |= memory[pc + 1]; 
-	op = get_enum_format(opcode);
-
-	current_opcode = opcode; // storing for later use
-
-	pc += 2; // get ready to fetch next instruction
-
-	return op;
-} 
-
-Opcode Chip8::get_enum_format(uint16_t opcode) {
-	switch (opcode) {
-		case 0x0E00:
-			return Opcode::kClearScreen;
-		case 0x1000:
-			return Opcode::kJump;
-		case 0x6000:
-			return Opcode::kSetVX;
-		case 0x7000:
-			return Opcode::kAddVX;
-		case 0xA000:
-			return Opcode::kSetIndexRegister;
-		case 0xD000:
-			return Opcode::kDraw;
+inline Chip8Instruction DecodeLogicalInstruction(BYTE n) {
+	switch (n) {
+		case 0:
+			return Chip8Instruction::SET_VX_VY;
+		case 1:
+			return Chip8Instruction::BINARY_OR;
+		case 2:
+			return Chip8Instruction::BINARY_AND;
+		case 3:
+			return Chip8Instruction::LOGICAL_XOR;
+		case 4:
+			return Chip8Instruction::ADD_VX_VY;
+		case 5:
+			return Chip8Instruction::SUB_VX_VY;
+		case 6:
+			return Chip8Instruction::SHIFTR;
+		case 7:
+			return Chip8Instruction::SUB_VY_VX;
+		case 14:
+			return Chip8Instruction::SHIFTL;
 	}
-	return Opcode::kUnsupported;
 }
 
-bool Chip8::load_rom(std::string const &path) {
+Chip8Instruction Chip8::decode(WORD opcode) {
+	BYTE id = ApplyBitmaskToWord(opcode, bitmask_id, 12);
+	BYTE n = ApplyBitmaskToWord(opcode, bitmask_n);
+	switch (id) {
+		case 0:
+			return Chip8Instruction::CLEAR;
+		case 1:
+			return Chip8Instruction::JUMP;
+		case 6:
+			return Chip8Instruction::SET_VX_NN;
+		case 7:
+			return Chip8Instruction::ADD_VX_NN;
+		case 10: // 0xA000
+			return Chip8Instruction::I_NNN;
+		case 13: // 0xD000
+			return Chip8Instruction::DRAW;
+		case 8:
+			DecodeLogicalInstruction(n);
+	}
+	return Chip8Instruction::UNSUPPORTED;
+}
+
+bool Chip8::load(std::string const &path) {
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
 
 	if (!file) // failed to open file!
@@ -113,44 +130,42 @@ bool Chip8::load_rom(std::string const &path) {
 	return true;
 }
 
-
-inline uint16_t ExtractNibbles(uint16_t bytes, uint16_t mask, uint8_t bits_to_shift=0) {	
-	return (bytes & mask) >> bits_to_shift; 
-}
-
 void Chip8::emulate_cycle() {
 
 	// Fetching stage
-	Opcode op = fetch_opcode();
-
+	WORD opcode = fetch_opcode();
+	pc += 2;
+	
 	// Decoding stage
-	uint16_t address = ExtractNibbles(current_opcode, mask_nnn);
-	uint8_t x = ExtractNibbles(current_opcode, mask_x, 8); // used to index registers VX-VF
-	uint8_t y = ExtractNibbles(current_opcode, mask_y, 4); // used to index registers VY-VF
-	uint8_t n = ExtractNibbles(current_opcode, mask_n); // a 4-bit number
-	uint8_t nn = ExtractNibbles(current_opcode, mask_nn); // an 8-bit immediate number
+	WORD address = ApplyBitmaskToWord(opcode, bitmask_nnn);
+	BYTE x = ApplyBitmaskToWord(opcode, bitmask_x, 8); // used to index registers VX-VF
+	BYTE y = ApplyBitmaskToWord(opcode, bitmask_y, 4); // used to index registers VY-VF
+	BYTE n = ApplyBitmaskToWord(opcode, bitmask_n); // a 4-bit number
+	BYTE nn = ApplyBitmaskToWord(opcode, bitmask_nn); // an 8-bit immediate number
+
+	Chip8Instruction instruction = decode(opcode);
 
 	// Execution stage
-	switch (op) {
-		case Opcode::kUnsupported:
+	switch (instruction) {
+		case Chip8Instruction::UNSUPPORTED:
 			std::cout << "Error: CHIP8 instruction set does not support this opcode\n";
 			return;
-		case Opcode::kClearScreen:
+		case Chip8Instruction::CLEAR:
 			clear_flag = true;
 			break;
-		case Opcode::kJump:
+		case Chip8Instruction::JUMP:
 			pc = address;
 			break;
-		case Opcode::kSetVX:
+		case Chip8Instruction::SET_VX_NN:
 			v[x] = nn;
 			break;
-		case Opcode::kAddVX:
+		case Chip8Instruction::ADD_VX_NN:
 			v[x] += nn;
 			break;
-		case Opcode::kSetIndexRegister:
+		case Chip8Instruction::I_NNN:
 			I = address;
 			break;
-		case Opcode::kDraw: 
+		case Chip8Instruction::DRAW: 
 			draw_flag = true;
 			break;
 	}
